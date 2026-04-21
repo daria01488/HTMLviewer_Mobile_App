@@ -2,9 +2,11 @@ package com.example.viewer
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.text.format.DateUtils
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
@@ -35,7 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-
+import androidx.compose.runtime.mutableLongStateOf
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,7 +55,6 @@ val SurfaceDark = Color(0xFF2A2A2A)
 val TextPrimary = Color(0xFFFFFFFF)
 val TextSecondary = Color(0xFFAAAAAA)
 
-
 @Composable
 fun HtmlViewerApp() {
     val context = LocalContext.current
@@ -61,6 +62,26 @@ fun HtmlViewerApp() {
     // State to hold the chosen file's URI and Name
     var currentUri by remember { mutableStateOf<Uri?>(null) }
     var currentFileName by remember { mutableStateOf<String?>(null) }
+
+    // State to hold our history of recent files
+    val recentFiles = remember { mutableStateListOf<RecentFile>() }
+
+    // Helper function to handle opening a file and updating history
+    fun openFileAndUpdateHistory(uri: Uri, fileName: String) {
+        currentUri = uri
+        currentFileName = fileName
+
+        // 1. Remove it if it's already in the list (so we can move it to the top)
+        recentFiles.removeAll { it.uri == uri }
+
+        // 2. Add it to the very top (index 0) with the current exact time
+        recentFiles.add(0, RecentFile(uri, fileName, System.currentTimeMillis()))
+
+        // 3. Keep only the last 3 files
+        if (recentFiles.size > 3) {
+            recentFiles.removeAt(recentFiles.size - 1)
+        }
+    }
 
     // This handles the Android hardware back button
     BackHandler(enabled = currentFileName != null) {
@@ -73,8 +94,17 @@ fun HtmlViewerApp() {
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            currentUri = uri
-            currentFileName = getFileName(context, uri)
+            // Ask Android to let us keep permission to read this file later!
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: SecurityException) {
+                e.printStackTrace()
+            }
+
+            openFileAndUpdateHistory(uri, getFileName(context, uri))
         }
     }
 
@@ -84,14 +114,14 @@ fun HtmlViewerApp() {
     ) {
         if (currentFileName == null) {
             UploadScreen(
+                recentFiles = recentFiles,
                 onLaunchPicker = {
                     // Launch the picker filtering for HTML/Text files
                     launcher.launch(arrayOf("text/html", "text/plain"))
                 },
-                onDemoFileSelected = { fileName ->
-                    // Fallback for your recent files dummy data
-                    currentUri = null
-                    currentFileName = fileName
+                onRecentFileSelected = { file ->
+                    // Open the file directly from the recent history
+                    openFileAndUpdateHistory(file.uri, file.name)
                 }
             )
         } else {
@@ -103,7 +133,6 @@ fun HtmlViewerApp() {
                     currentFileName = null
                 },
                 onClick = {
-                    // THE FIX: This tells the filename pill to open the file picker!
                     launcher.launch(arrayOf("text/html", "text/plain"))
                 }
             )
@@ -112,7 +141,11 @@ fun HtmlViewerApp() {
 }
 
 @Composable
-fun UploadScreen(onLaunchPicker: () -> Unit, onDemoFileSelected: (String) -> Unit) {
+fun UploadScreen(
+    recentFiles: List<RecentFile>,
+    onLaunchPicker: () -> Unit,
+    onRecentFileSelected: (RecentFile) -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -153,15 +186,19 @@ fun UploadScreen(onLaunchPicker: () -> Unit, onDemoFileSelected: (String) -> Uni
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        val recentFiles = listOf(
-            RecentFile("landing-page.html", "30m ago"),
-            RecentFile("project-spec.pdf", "2h ago"),
-            RecentFile("newsletter.html", "1d ago")
-        )
-
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(recentFiles) { file ->
-                RecentFileCard(file) { onDemoFileSelected(file.name) }
+        // Check if our history is empty or not
+        if (recentFiles.isEmpty()) {
+            Text(
+                text = "No recent files",
+                color = TextSecondary,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(recentFiles) { file ->
+                    RecentFileCard(file = file) { onRecentFileSelected(file) }
+                }
             }
         }
     }
@@ -232,6 +269,27 @@ fun UploadBox(onClick: () -> Unit) {
 
 @Composable
 fun RecentFileCard(file: RecentFile, onClick: () -> Unit) {
+    // 1. Create a state variable that holds the current time.
+    // Because it's a "State", changing it will force the card to redraw.
+    var currentTimeMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    // 2. Start a background loop that runs as long as this card is visible
+    LaunchedEffect(Unit) {
+        while (true) {
+            // Wait for 60,000 milliseconds (1 minute)
+            kotlinx.coroutines.delay(60_000L)
+            // Update the state with the new actual time
+            currentTimeMs = System.currentTimeMillis()
+        }
+    }
+
+    // 3. Calculate the time string using our live-updating currentTimeMs
+    val timeString = DateUtils.getRelativeTimeSpanString(
+        file.timeMs,
+        currentTimeMs,
+        DateUtils.MINUTE_IN_MILLIS
+    ).toString()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -249,7 +307,7 @@ fun RecentFileCard(file: RecentFile, onClick: () -> Unit) {
                 fontWeight = FontWeight.Medium
             )
             Text(
-                text = file.time,
+                text = timeString, // This will now automatically change!
                 color = TextSecondary,
                 fontSize = 12.sp
             )
@@ -262,11 +320,9 @@ fun RecentFileCard(file: RecentFile, onClick: () -> Unit) {
 fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit, onClick: () -> Unit) {
     val context = LocalContext.current
 
-    // Read the HTML content from the URI, or use the demo if no URI exists
     val htmlContent = remember(fileUri) {
         if (fileUri != null) {
             try {
-                // Open the file and read it into a String
                 context.contentResolver.openInputStream(fileUri)?.bufferedReader()?.use {
                     it.readText()
                 } ?: "Error: Could not read file."
@@ -274,25 +330,7 @@ fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit, onClick: (
                 "Error reading file: ${e.message}"
             }
         } else {
-            // Fallback string for dummy "Recent Files" clicks
-            """
-            <!DOCTYPE html>
-            <html>
-            <body style="font-family: sans-serif; padding: 20px; color: #333; background-color: #FDF9F1;">
-                <h1 style="font-size: 28px;">Sample Document<br>Title - About Us</h1>
-                <p>This is a sample header. Your sample site and develop our inourant evort iour business. Our team portrait, information skills and biea and compares from presint team.</p>
-                <div style="background-color: #e0e0e0; height: 180px; width: 100%; margin: 20px 0; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #888;">
-                    [Team Photo Placeholder]
-                </div>
-                <ul>
-                    <li>Our teamesting team</li>
-                    <li>Our support cilient teams</li>
-                    <li>Descuvors and communites</li>
-                </ul>
-                <button style="background-color: #007BFF; color: white; border: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; margin-top: 20px;">CONTACT</button>
-            </body>
-            </html>
-            """.trimIndent()
+            "<h1>File Error</h1><p>No valid URI provided.</p>"
         }
     }
 
@@ -301,21 +339,18 @@ fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit, onClick: (
             .fillMaxSize()
             .background(BgDark)
     ) {
-        // Top Header
         Column(modifier = Modifier.padding(24.dp, 16.dp)) {
-
-            // Toolbar (Filename pill and desktop icon)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(SurfaceDark)
-                    .padding(12.dp)
-                    .clickable { onBack() }
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(SurfaceDark)
+                        .padding(12.dp)
+                        .clickable { onBack() }
                 ) {
                     Icon(
                         painter = painterResource(id = R.drawable.custom_computer_icon),
@@ -334,7 +369,6 @@ fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit, onClick: (
                         .padding(horizontal = 16.dp, vertical = 13.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    // Limit filename length so it doesn't break UI
                     Text(
                         text = fileName,
                         color = TextPrimary,
@@ -367,11 +401,9 @@ fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit, onClick: (
 
 // --- Helper Functions & Classes ---
 
-data class RecentFile(val name: String, val time: String)
+// Updated data class to hold the Uri and the precise timestamp
+data class RecentFile(val uri: Uri, val name: String, val timeMs: Long)
 
-/**
- * Safely extracts the real file name from an Android Content URI
- */
 @SuppressLint("Range")
 fun getFileName(context: Context, uri: Uri): String {
     var result: String? = null
