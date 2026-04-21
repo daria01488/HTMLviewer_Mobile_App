@@ -1,5 +1,5 @@
 package com.example.viewer
-
+import androidx.compose.foundation.layout.systemBarsPadding
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
@@ -109,8 +109,9 @@ fun HtmlViewerApp() {
     }
 
     Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = BgDark
+        modifier = Modifier.fillMaxSize()
+            .systemBarsPadding(),
+        color = BgDark,
     ) {
         if (currentFileName == null) {
             UploadScreen(
