@@ -101,6 +101,10 @@ fun HtmlViewerApp() {
                 onBack = {
                     currentUri = null
                     currentFileName = null
+                },
+                onClick = {
+                    // THE FIX: This tells the filename pill to open the file picker!
+                    launcher.launch(arrayOf("text/html", "text/plain"))
                 }
             )
         }
@@ -206,7 +210,7 @@ fun UploadBox(onClick: () -> Unit) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
                 painter = painterResource(id = R.drawable.custom_upload_icon),
-                modifier = Modifier.size(40.dp),
+                modifier = Modifier.size(32.dp),
                 contentDescription = "Upload",
                 tint = TextPrimary
             )
@@ -255,7 +259,7 @@ fun RecentFileCard(file: RecentFile, onClick: () -> Unit) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit) {
+fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit, onClick: () -> Unit) {
     val context = LocalContext.current
 
     // Read the HTML content from the URI, or use the demo if no URI exists
@@ -307,11 +311,26 @@ fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(SurfaceDark)
+                    .padding(12.dp)
+                    .clickable { onBack() }
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.custom_computer_icon),
+                        modifier = Modifier.size(24.dp),
+                        contentDescription = "Desktop Icon",
+                        tint = TextPrimary
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Box(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(8.dp))
                         .background(SurfaceDark)
-                        .clickable { onBack() }
+                        .clickable { onClick() }
                         .padding(horizontal = 16.dp, vertical = 13.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -321,20 +340,6 @@ fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit) {
                         color = TextPrimary,
                         fontSize = 14.sp,
                         maxLines = 1
-                    )
-                }
-                Spacer(modifier = Modifier.width(16.dp))
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(SurfaceDark)
-                        .padding(12.dp)
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.custom_computer_icon),
-                        modifier = Modifier.size(24.dp),
-                        contentDescription = "Desktop Icon",
-                        tint = TextPrimary
                     )
                 }
             }
