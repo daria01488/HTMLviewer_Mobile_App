@@ -1,10 +1,16 @@
 package com.example.viewer
 
 import android.annotation.SuppressLint
+import android.content.Context
+import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,8 +21,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.getValue // REQUIRED for 'by remember'
-import androidx.compose.runtime.setValue // REQUIRED for 'by remember'
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -25,12 +29,12 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.example.viewer.R
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,28 +56,59 @@ val TextSecondary = Color(0xFFAAAAAA)
 
 @Composable
 fun HtmlViewerApp() {
-    // State to toggle between the upload screen and the viewer screen
-    var currentFile by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+
+    // State to hold the chosen file's URI and Name
+    var currentUri by remember { mutableStateOf<Uri?>(null) }
+    var currentFileName by remember { mutableStateOf<String?>(null) }
+
+    // This handles the Android hardware back button
+    BackHandler(enabled = currentFileName != null) {
+        currentUri = null
+        currentFileName = null
+    }
+
+    // The File Picker Launcher
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            currentUri = uri
+            currentFileName = getFileName(context, uri)
+        }
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = BgDark
     ) {
-        if (currentFile == null) {
-            UploadScreen(onFileSelected = { fileName ->
-                currentFile = fileName
-            })
+        if (currentFileName == null) {
+            UploadScreen(
+                onLaunchPicker = {
+                    // Launch the picker filtering for HTML/Text files
+                    launcher.launch(arrayOf("text/html", "text/plain"))
+                },
+                onDemoFileSelected = { fileName ->
+                    // Fallback for your recent files dummy data
+                    currentUri = null
+                    currentFileName = fileName
+                }
+            )
         } else {
             ViewerScreen(
-                fileName = currentFile!!,
-                onBack = { currentFile = null }
+                fileName = currentFileName!!,
+                fileUri = currentUri,
+                onBack = {
+                    currentUri = null
+                    currentFileName = null
+                }
             )
         }
     }
 }
 
 @Composable
-fun UploadScreen(onFileSelected: (String) -> Unit) {
+fun UploadScreen(onLaunchPicker: () -> Unit, onDemoFileSelected: (String) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -91,7 +126,7 @@ fun UploadScreen(onFileSelected: (String) -> Unit) {
         Spacer(modifier = Modifier.height(24.dp))
 
         // Upload Area with Dashed Border
-        UploadBox(onClick = { onFileSelected("landing-page.html") })
+        UploadBox(onClick = onLaunchPicker)
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -112,7 +147,7 @@ fun UploadScreen(onFileSelected: (String) -> Unit) {
             )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         val recentFiles = listOf(
             RecentFile("landing-page.html", "30m ago"),
@@ -122,7 +157,7 @@ fun UploadScreen(onFileSelected: (String) -> Unit) {
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(recentFiles) { file ->
-                RecentFileCard(file) { onFileSelected(file.name) }
+                RecentFileCard(file) { onDemoFileSelected(file.name) }
             }
         }
     }
@@ -135,7 +170,7 @@ fun HeaderSection() {
             painter = painterResource(id = R.drawable.custom_description_icon),
             modifier = Modifier.size(32.dp),
             contentDescription = "App Icon",
-            tint = Color.Unspecified // Ensures your custom colored PNG shows correctly
+            tint = Color.Unspecified
         )
         Spacer(modifier = Modifier.width(12.dp))
         Text(
@@ -173,7 +208,7 @@ fun UploadBox(onClick: () -> Unit) {
                 painter = painterResource(id = R.drawable.custom_upload_icon),
                 modifier = Modifier.size(40.dp),
                 contentDescription = "Upload",
-                tint = TextPrimary // Keeps this icon white
+                tint = TextPrimary
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
@@ -220,7 +255,43 @@ fun RecentFileCard(file: RecentFile, onClick: () -> Unit) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun ViewerScreen(fileName: String, onBack: () -> Unit) {
+fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit) {
+    val context = LocalContext.current
+
+    // Read the HTML content from the URI, or use the demo if no URI exists
+    val htmlContent = remember(fileUri) {
+        if (fileUri != null) {
+            try {
+                // Open the file and read it into a String
+                context.contentResolver.openInputStream(fileUri)?.bufferedReader()?.use {
+                    it.readText()
+                } ?: "Error: Could not read file."
+            } catch (e: Exception) {
+                "Error reading file: ${e.message}"
+            }
+        } else {
+            // Fallback string for dummy "Recent Files" clicks
+            """
+            <!DOCTYPE html>
+            <html>
+            <body style="font-family: sans-serif; padding: 20px; color: #333; background-color: #FDF9F1;">
+                <h1 style="font-size: 28px;">Sample Document<br>Title - About Us</h1>
+                <p>This is a sample header. Your sample site and develop our inourant evort iour business. Our team portrait, information skills and biea and compares from presint team.</p>
+                <div style="background-color: #e0e0e0; height: 180px; width: 100%; margin: 20px 0; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #888;">
+                    [Team Photo Placeholder]
+                </div>
+                <ul>
+                    <li>Our teamesting team</li>
+                    <li>Our support cilient teams</li>
+                    <li>Descuvors and communites</li>
+                </ul>
+                <button style="background-color: #007BFF; color: white; border: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; margin-top: 20px;">CONTACT</button>
+            </body>
+            </html>
+            """.trimIndent()
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -244,7 +315,13 @@ fun ViewerScreen(fileName: String, onBack: () -> Unit) {
                         .padding(horizontal = 16.dp, vertical = 13.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(text = fileName, color = TextPrimary, fontSize = 14.sp)
+                    // Limit filename length so it doesn't break UI
+                    Text(
+                        text = fileName,
+                        color = TextPrimary,
+                        fontSize = 14.sp,
+                        maxLines = 1
+                    )
                 }
                 Spacer(modifier = Modifier.width(16.dp))
                 Box(
@@ -257,33 +334,12 @@ fun ViewerScreen(fileName: String, onBack: () -> Unit) {
                         painter = painterResource(id = R.drawable.custom_computer_icon),
                         modifier = Modifier.size(24.dp),
                         contentDescription = "Desktop Icon",
-                        tint = TextPrimary // Keeps this icon white
+                        tint = TextPrimary
                     )
                 }
             }
         }
 
-        val htmlContent = """
-            <!DOCTYPE html>
-            <html>
-            <body style="font-family: sans-serif; padding: 20px; color: #333; background-color: #FDF9F1;">
-                <h1 style="font-size: 28px;">Sample Document<br>Title - About Us</h1>
-                <p>This is a sample header. Your sample site and develop our inourant evort iour business. Our team portrait, information skills and biea and compares from presint team.</p>
-                <div style="background-color: #e0e0e0; height: 180px; width: 100%; margin: 20px 0; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #888;">
-                    [Team Photo Placeholder]
-                </div>
-                <ul>
-                    <li>Our teamesting team</li>
-                    <li>Our support cilient teams</li>
-                    <li>Descuvors and communites</li>
-                </ul>
-                <button style="background-color: #007BFF; color: white; border: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; margin-top: 20px;">CONTACT</button>
-            </body>
-            </html>
-        """.trimIndent()
-
-        // THE FIX: Changed from fillMaxSize() to weight(1f).fillMaxWidth()
-        // to prevent the WebView from breaking layout bounds inside the Column
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -291,8 +347,8 @@ fun ViewerScreen(fileName: String, onBack: () -> Unit) {
                 .background(Color.White)
         ) {
             AndroidView(
-                factory = { context ->
-                    WebView(context).apply {
+                factory = { ctx ->
+                    WebView(ctx).apply {
                         settings.javaScriptEnabled = true
                         webViewClient = WebViewClient()
                         loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
@@ -304,4 +360,32 @@ fun ViewerScreen(fileName: String, onBack: () -> Unit) {
     }
 }
 
+// --- Helper Functions & Classes ---
+
 data class RecentFile(val name: String, val time: String)
+
+/**
+ * Safely extracts the real file name from an Android Content URI
+ */
+@SuppressLint("Range")
+fun getFileName(context: Context, uri: Uri): String {
+    var result: String? = null
+    if (uri.scheme == "content") {
+        val cursor = context.contentResolver.query(uri, null, null, null, null)
+        try {
+            if (cursor != null && cursor.moveToFirst()) {
+                result = cursor.getString(cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME))
+            }
+        } finally {
+            cursor?.close()
+        }
+    }
+    if (result == null) {
+        result = uri.path
+        val cut = result?.lastIndexOf('/')
+        if (cut != null && cut != -1) {
+            result = result.substring(cut + 1)
+        }
+    }
+    return result ?: "Unknown File"
+}
