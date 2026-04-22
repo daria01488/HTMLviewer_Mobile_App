@@ -1,18 +1,13 @@
 package com.example.viewer
-import androidx.compose.foundation.layout.systemBarsPadding
+
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
-import android.provider.OpenableColumns
 import android.text.format.DateUtils
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,29 +16,32 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.runtime.mutableLongStateOf
+import kotlinx.coroutines.delay
+import java.net.URLEncoder
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                HtmlViewerApp()
+                BrowserApp()
             }
         }
     }
@@ -54,87 +52,76 @@ val BgDark = Color(0xFF161616)
 val SurfaceDark = Color(0xFF2A2A2A)
 val TextPrimary = Color(0xFFFFFFFF)
 val TextSecondary = Color(0xFFAAAAAA)
+val AccentBlue = Color(0xFF4A90E2)
 
 @Composable
-fun HtmlViewerApp() {
+fun BrowserApp() {
     val context = LocalContext.current
+    var currentUrl by remember { mutableStateOf<String?>(null) }
 
-    // State to hold the chosen file's URI and Name
-    var currentUri by remember { mutableStateOf<Uri?>(null) }
-    var currentFileName by remember { mutableStateOf<String?>(null) }
-
-    // State to hold our history of recent files
-    val recentFiles = remember { mutableStateListOf<RecentFile>() }
-
-    // Helper function to handle opening a file and updating history
-    fun openFileAndUpdateHistory(uri: Uri, fileName: String) {
-        currentUri = uri
-        currentFileName = fileName
-
-        // 1. Remove it if it's already in the list (so we can move it to the top)
-        recentFiles.removeAll { it.uri == uri }
-
-        // 2. Add it to the very top (index 0) with the current exact time
-        recentFiles.add(0, RecentFile(uri, fileName, System.currentTimeMillis()))
-
-        // 3. Keep only the last 3 files
-        if (recentFiles.size > 3) {
-            recentFiles.removeAt(recentFiles.size - 1)
+    // Initialize list by reading from the phone's saved storage
+    val recentSearches = remember {
+        mutableStateListOf<RecentSearch>().apply {
+            addAll(HistoryManager.loadHistory(context))
         }
     }
 
-    // This handles the Android hardware back button
-    BackHandler(enabled = currentFileName != null) {
-        currentUri = null
-        currentFileName = null
-    }
+    // Smart logic to handle Google searches vs direct URLs
+    fun openUrlAndUpdateHistory(input: String) {
+        if (input.isBlank()) return
+        val cleanInput = input.trim()
+        val looksLikeUrl = cleanInput.contains(".") && !cleanInput.contains(" ")
 
-    // The File Picker Launcher
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            // Ask Android to let us keep permission to read this file later!
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (e: SecurityException) {
-                e.printStackTrace()
+        val finalUrl = when {
+            looksLikeUrl && !cleanInput.startsWith("http://") && !cleanInput.startsWith("https://") -> {
+                "https://$cleanInput"
             }
-
-            openFileAndUpdateHistory(uri, getFileName(context, uri))
+            looksLikeUrl -> cleanInput
+            else -> {
+                val encodedQuery = URLEncoder.encode(cleanInput, "UTF-8")
+                "https://www.google.com/search?q=$encodedQuery"
+            }
         }
+
+        currentUrl = finalUrl
+
+        // Update history order
+        recentSearches.removeAll { it.url == finalUrl }
+        recentSearches.add(0, RecentSearch(finalUrl, System.currentTimeMillis()))
+
+        // Keep only top 5 searches
+        if (recentSearches.size > 5) {
+            recentSearches.removeAt(recentSearches.size - 1)
+        }
+
+        // Save updated list to phone storage
+        HistoryManager.saveHistory(context, recentSearches)
+    }
+
+    // Handle hardware back button
+    BackHandler(enabled = currentUrl != null) {
+        currentUrl = null
     }
 
     Surface(
-        modifier = Modifier.fillMaxSize()
-            .systemBarsPadding(),
+        modifier = Modifier
+            .fillMaxSize()
+            .systemBarsPadding(), // Ensures UI is below status bar and above nav bar
         color = BgDark,
     ) {
-        if (currentFileName == null) {
-            UploadScreen(
-                recentFiles = recentFiles,
-                onLaunchPicker = {
-                    // Launch the picker filtering for HTML/Text files
-                    launcher.launch(arrayOf("text/html", "text/plain"))
-                },
-                onRecentFileSelected = { file ->
-                    // Open the file directly from the recent history
-                    openFileAndUpdateHistory(file.uri, file.name)
+        if (currentUrl == null) {
+            SearchScreen(
+                recentSearches = recentSearches,
+                onSearch = { url ->
+                    openUrlAndUpdateHistory(url)
                 }
             )
         } else {
             ViewerScreen(
-                fileName = currentFileName!!,
-                fileUri = currentUri,
-                onBack = {
-                    currentUri = null
-                    currentFileName = null
-                },
-                onClick = {
-                    launcher.launch(arrayOf("text/html", "text/plain"))
+                url = currentUrl!!,
+                onBack = { currentUrl = null },
+                onSearch = { newUrl ->
+                    openUrlAndUpdateHistory(newUrl)
                 }
             )
         }
@@ -142,33 +129,74 @@ fun HtmlViewerApp() {
 }
 
 @Composable
-fun UploadScreen(
-    recentFiles: List<RecentFile>,
-    onLaunchPicker: () -> Unit,
-    onRecentFileSelected: (RecentFile) -> Unit
+fun SearchScreen(
+    recentSearches: List<RecentSearch>,
+    onSearch: (String) -> Unit
 ) {
+    val focusManager = LocalFocusManager.current
+    var searchInput by remember { mutableStateOf("") }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp)
     ) {
-        // App Header
         HeaderSection()
 
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "Upload File to View HTML",
+            text = "Enter a web address to browse",
             color = TextSecondary,
             fontSize = 14.sp
         )
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Upload Area with Dashed Border
-        UploadBox(onClick = onLaunchPicker)
+        OutlinedTextField(
+            value = searchInput,
+            onValueChange = { searchInput = it },
+            placeholder = { Text("e.g. google.com", color = TextSecondary) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = TextPrimary,
+                unfocusedTextColor = TextPrimary,
+                focusedBorderColor = AccentBlue,
+                unfocusedBorderColor = SurfaceDark,
+                focusedContainerColor = SurfaceDark,
+                unfocusedContainerColor = SurfaceDark,
+                cursorColor = AccentBlue
+            ),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Uri,
+                imeAction = ImeAction.Go
+            ),
+            keyboardActions = KeyboardActions(
+                onGo = {
+                    focusManager.clearFocus()
+                    onSearch(searchInput)
+                }
+            )
+        )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        // Recent Files Section
+        Button(
+            onClick = {
+                focusManager.clearFocus()
+                onSearch(searchInput)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)
+        ) {
+            Text("Browse", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        }
+
+        Spacer(modifier = Modifier.height(40.dp))
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
@@ -178,7 +206,7 @@ fun UploadScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "RECENT FILES",
+                text = "RECENT SEARCHES",
                 color = TextSecondary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold
@@ -187,18 +215,19 @@ fun UploadScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Check if our history is empty or not
-        if (recentFiles.isEmpty()) {
+        if (recentSearches.isEmpty()) {
             Text(
-                text = "No recent files",
+                text = "No recent searches",
                 color = TextSecondary,
                 fontSize = 14.sp,
                 modifier = Modifier.padding(top = 8.dp)
             )
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(recentFiles) { file ->
-                    RecentFileCard(file = file) { onRecentFileSelected(file) }
+                items(recentSearches) { search ->
+                    RecentSearchCard(search = search) {
+                        onSearch(search.url)
+                    }
                 }
             }
         }
@@ -216,7 +245,7 @@ fun HeaderSection() {
         )
         Spacer(modifier = Modifier.width(12.dp))
         Text(
-            text = "HTML Viewer",
+            text = "Web Viewer",
             color = TextPrimary,
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold
@@ -225,68 +254,19 @@ fun HeaderSection() {
 }
 
 @Composable
-fun UploadBox(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(160.dp)
-            .drawBehind {
-                val stroke = Stroke(
-                    width = 4f,
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 20f), 0f)
-                )
-                drawRoundRect(
-                    color = SurfaceDark,
-                    style = stroke,
-                    cornerRadius = CornerRadius(16.dp.toPx())
-                )
-            }
-            .clickable { onClick() }
-            .padding(16.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                painter = painterResource(id = R.drawable.custom_upload_icon),
-                modifier = Modifier.size(32.dp),
-                contentDescription = "Upload",
-                tint = TextPrimary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Choose a Document",
-                color = TextPrimary,
-                fontWeight = FontWeight.Medium
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "HTML, HTM files supported",
-                color = TextSecondary,
-                fontSize = 12.sp
-            )
-        }
-    }
-}
-
-@Composable
-fun RecentFileCard(file: RecentFile, onClick: () -> Unit) {
-    // 1. Create a state variable that holds the current time.
-    // Because it's a "State", changing it will force the card to redraw.
+fun RecentSearchCard(search: RecentSearch, onClick: () -> Unit) {
     var currentTimeMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
-    // 2. Start a background loop that runs as long as this card is visible
+    // Live updating background timer
     LaunchedEffect(Unit) {
         while (true) {
-            // Wait for 60,000 milliseconds (1 minute)
-            kotlinx.coroutines.delay(60_000L)
-            // Update the state with the new actual time
+            delay(60_000L)
             currentTimeMs = System.currentTimeMillis()
         }
     }
 
-    // 3. Calculate the time string using our live-updating currentTimeMs
     val timeString = DateUtils.getRelativeTimeSpanString(
-        file.timeMs,
+        search.timeMs,
         currentTimeMs,
         DateUtils.MINUTE_IN_MILLIS
     ).toString()
@@ -297,18 +277,22 @@ fun RecentFileCard(file: RecentFile, onClick: () -> Unit) {
             .clip(RoundedCornerShape(12.dp))
             .background(SurfaceDark)
             .clickable { onClick() }
-            .padding(16.dp),
+            .padding(16.dp, 16.dp), // Fixed padding to look better
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column {
             Text(
-                text = file.name,
+                text = search.url.replace("https://www.google.com/search?q=", "Search: ")
+                    .replace("https://", "")
+                    .replace("http://", "")
+                    .replace("+", " "),
                 color = TextPrimary,
                 fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.Medium,
+                maxLines = 1
             )
             Text(
-                text = timeString, // This will now automatically change!
+                text = timeString,
                 color = TextSecondary,
                 fontSize = 12.sp
             )
@@ -318,65 +302,85 @@ fun RecentFileCard(file: RecentFile, onClick: () -> Unit) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit, onClick: () -> Unit) {
-    val context = LocalContext.current
+fun ViewerScreen(url: String, onBack: () -> Unit, onSearch: (String) -> Unit) {
+    val focusManager = LocalFocusManager.current
 
-    val htmlContent = remember(fileUri) {
-        if (fileUri != null) {
-            try {
-                context.contentResolver.openInputStream(fileUri)?.bufferedReader()?.use {
-                    it.readText()
-                } ?: "Error: Could not read file."
-            } catch (e: Exception) {
-                "Error reading file: ${e.message}"
-            }
-        } else {
-            "<h1>File Error</h1><p>No valid URI provided.</p>"
+    // Helper function to make URLs look clean in the address bar
+    fun formatDisplayUrl(raw: String): String {
+        // If it's a Google search, extract just the search term
+        if (raw.contains("google.com/search?q=")) {
+            val qStart = raw.indexOf("q=") + 2
+            val qEnd = raw.indexOf("&", qStart).takeIf { it != -1 } ?: raw.length
+            return try {
+                java.net.URLDecoder.decode(raw.substring(qStart, qEnd), "UTF-8")
+            } catch (e: Exception) { raw }
         }
+        // Otherwise, just remove the https://
+        return raw.replace("https://", "").replace("http://", "")
     }
+
+    // State for the text in the search bar
+    var searchInput by remember(url) { mutableStateOf(formatDisplayUrl(url)) }
+
+    // State to prevent the WebView from getting stuck in an infinite reload loop
+    var lastLoadedUrl by remember { mutableStateOf(url) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(BgDark)
     ) {
-        Column(modifier = Modifier.padding(24.dp, 16.dp)) {
+        Column(modifier = Modifier.padding(16.dp, 8.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Back Button
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .background(SurfaceDark)
-                        .padding(12.dp)
                         .clickable { onBack() }
+                        .padding(14.dp)
                 ) {
                     Icon(
                         painter = painterResource(id = R.drawable.custom_computer_icon),
                         modifier = Modifier.size(24.dp),
-                        contentDescription = "Desktop Icon",
+                        contentDescription = "Back",
                         tint = TextPrimary
                     )
                 }
+
                 Spacer(modifier = Modifier.width(8.dp))
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(SurfaceDark)
-                        .clickable { onClick() }
-                        .padding(horizontal = 16.dp, vertical = 13.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = fileName,
-                        color = TextPrimary,
-                        fontSize = 14.sp,
-                        maxLines = 1
+
+                // Interactive Address Bar
+                OutlinedTextField(
+                    value = searchInput,
+                    onValueChange = { searchInput = it },
+                    modifier = Modifier.weight(1f).height(54.dp), // Slim height
+                    singleLine = true,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedBorderColor = AccentBlue,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedContainerColor = SurfaceDark,
+                        unfocusedContainerColor = SurfaceDark,
+                        cursorColor = AccentBlue
+                    ),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        imeAction = ImeAction.Go
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onGo = {
+                            focusManager.clearFocus()
+                            onSearch(searchInput)
+                        }
                     )
-                }
+                )
             }
         }
 
@@ -390,8 +394,24 @@ fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit, onClick: (
                 factory = { ctx ->
                     WebView(ctx).apply {
                         settings.javaScriptEnabled = true
-                        webViewClient = WebViewClient()
-                        loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
+                        settings.domStorageEnabled = true
+
+                        // THE FIX: This custom client listens for page changes
+                        webViewClient = object : WebViewClient() {
+                            override fun doUpdateVisitedHistory(view: WebView, loadedUrl: String, isReload: Boolean) {
+                                super.doUpdateVisitedHistory(view, loadedUrl, isReload)
+                                // Automatically sync the top address bar with the new internal page!
+                                searchInput = formatDisplayUrl(loadedUrl)
+                            }
+                        }
+                        loadUrl(url)
+                    }
+                },
+                update = { webView ->
+                    // Only tell the WebView to load if the user hit "Go" on their keyboard
+                    if (url != lastLoadedUrl) {
+                        webView.loadUrl(url)
+                        lastLoadedUrl = url
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -399,31 +419,32 @@ fun ViewerScreen(fileName: String, fileUri: Uri?, onBack: () -> Unit, onClick: (
         }
     }
 }
+// --- Data Classes & Persistence Helpers ---
 
-// --- Helper Functions & Classes ---
+data class RecentSearch(val url: String, val timeMs: Long)
 
-// Updated data class to hold the Uri and the precise timestamp
-data class RecentFile(val uri: Uri, val name: String, val timeMs: Long)
+object HistoryManager {
+    private const val PREFS_NAME = "browser_prefs"
+    private const val KEY_HISTORY = "recent_searches"
 
-@SuppressLint("Range")
-fun getFileName(context: Context, uri: Uri): String {
-    var result: String? = null
-    if (uri.scheme == "content") {
-        val cursor = context.contentResolver.query(uri, null, null, null, null)
-        try {
-            if (cursor != null && cursor.moveToFirst()) {
-                result = cursor.getString(cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME))
-            }
-        } finally {
-            cursor?.close()
+    fun saveHistory(context: Context, history: List<RecentSearch>) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val historyString = history.joinToString(",") { "${it.url}|${it.timeMs}" }
+        prefs.edit().putString(KEY_HISTORY, historyString).apply()
+    }
+
+    fun loadHistory(context: Context): List<RecentSearch> {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val historyString = prefs.getString(KEY_HISTORY, "") ?: ""
+        if (historyString.isEmpty()) return emptyList()
+
+        return historyString.split(",").mapNotNull { entry ->
+            val parts = entry.split("|")
+            if (parts.size == 2) {
+                val url = parts[0]
+                val time = parts[1].toLongOrNull()
+                if (time != null) RecentSearch(url, time) else null
+            } else null
         }
     }
-    if (result == null) {
-        result = uri.path
-        val cut = result?.lastIndexOf('/')
-        if (cut != null && cut != -1) {
-            result = result.substring(cut + 1)
-        }
-    }
-    return result ?: "Unknown File"
 }
